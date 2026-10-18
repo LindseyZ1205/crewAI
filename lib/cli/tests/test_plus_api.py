@@ -283,6 +283,8 @@ class TestPlusAPI(unittest.TestCase):
         )
         self.assertEqual(response, mock_response)
 
+    @patch.dict("crewai_core.plus_api._MACHINE_TRANSPORT_ENV", clear=True)
+    @patch("crewai_core.plus_api._os_proxies", dict)
     @patch("crewai_core.plus_api.httpx.Client")
     def test_make_request(self, mock_client_class):
         mock_client_instance = MagicMock()
@@ -292,7 +294,9 @@ class TestPlusAPI(unittest.TestCase):
 
         response = self.api._make_request("GET", "test_endpoint")
 
-        mock_client_class.assert_called_once_with(verify=True)
+        mock_client_class.assert_called_once_with(
+            verify=True, trust_env=False, mounts={}
+        )
         mock_client_instance.request.assert_called_once_with(
             "GET", f"{self.api.base_url}/test_endpoint", headers=self.api.headers
         )
@@ -572,11 +576,12 @@ def test_requests_without_their_own_timeout_keep_the_httpx_default():
 
 
 @pytest.mark.block_network(allowed_hosts=["127.0.0.1"])
-def test_zip_deploy_uploads_go_through_the_proxy_named_in_the_environment(
+def test_zip_deploy_uploads_go_through_the_proxy_the_machine_names(
     tmp_path, monkeypatch
 ):
     # Corporate networks and coding-agent sandboxes only allow traffic through
     # the proxy in HTTP(S)_PROXY; the CLI's own ZIP upload must use it too.
+    # The machine's variables are the ones crewai-core pinned at startup.
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     import threading
     import zipfile
@@ -597,10 +602,10 @@ def test_zip_deploy_uploads_go_through_the_proxy_named_in_the_environment(
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Proxy)
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"):
-        monkeypatch.delenv(name, raising=False)
-        monkeypatch.delenv(name.lower(), raising=False)
-    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.setattr(
+        "crewai_core.plus_api._MACHINE_TRANSPORT_ENV",
+        {"HTTP_PROXY": f"http://127.0.0.1:{server.server_address[1]}"},
+    )
     project_zip = tmp_path / "project.zip"
     with zipfile.ZipFile(project_zip, "w") as archive:
         archive.writestr("pyproject.toml", "[project]\nname = 'demo'\n")
